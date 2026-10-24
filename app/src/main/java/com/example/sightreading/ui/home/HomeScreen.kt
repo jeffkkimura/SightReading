@@ -33,6 +33,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.platform.LocalContext
+import com.example.sightreading.data.NoteAnalyticsRepository
 import com.example.sightreading.data.UserPreferencesRepository
 import com.example.sightreading.model.KeySignature
 import com.example.sightreading.model.KeyType
@@ -60,6 +62,10 @@ fun HomeScreen(
         val nonZero = proficiencies.values.filter { it.totalAttempts > 0 }
         if (nonZero.isNotEmpty()) nonZero.map { it.averageAccuracy }.average().toFloat() * 100f else 0f
     }
+
+    val context = LocalContext.current
+    val noteAnalyticsRepo = remember(context) { NoteAnalyticsRepository(context) }
+    val noteAnalytics by noteAnalyticsRepo.noteAnalytics.collectAsState()
 
     Column(
         modifier = Modifier
@@ -139,6 +145,32 @@ fun HomeScreen(
                     )
                 }
                 Text("Start ▶", fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
+            }
+        }
+
+        Spacer(modifier = Modifier.height(14.dp))
+
+        // Note Pitch Mastery Statistics Card
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+            shape = RoundedCornerShape(12.dp)
+        ) {
+            Column(modifier = Modifier.padding(14.dp)) {
+                Text(
+                    text = "🎯 Note Pitch Mastery Statistics",
+                    style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold)
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceAround
+                ) {
+                    StatItem(title = "Notes Pressed", value = "${noteAnalytics.totalNotesPressed}")
+                    StatItem(title = "Strongest Pitch", value = noteAnalytics.mostAccurateNote)
+                    StatItem(title = "Needs Practice", value = noteAnalytics.weakestNote)
+                    StatItem(title = "Accuracy", value = "${noteAnalytics.overallAccuracy.toInt()}%")
+                }
             }
         }
 

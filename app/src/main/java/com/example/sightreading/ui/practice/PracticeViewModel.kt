@@ -10,6 +10,7 @@ import com.example.sightreading.audio.PianoSoundEngine
 import com.example.sightreading.audio.PitchDetector
 import com.example.sightreading.audio.PitchResult
 import com.example.sightreading.data.LessonRepository
+import com.example.sightreading.data.NoteAnalyticsRepository
 import com.example.sightreading.data.UserPreferencesRepository
 import com.example.sightreading.model.Lesson
 import com.example.sightreading.model.MusicalNote
@@ -59,6 +60,7 @@ data class PracticeUiState(
 class PracticeViewModel(application: Application) : AndroidViewModel(application) {
 
     private val userPrefsRepo = UserPreferencesRepository(application)
+    val noteAnalyticsRepo = NoteAnalyticsRepository(application)
     val pitchDetector = PitchDetector()
     val metronomeEngine = MetronomeEngine()
     val pianoSoundEngine = PianoSoundEngine()
@@ -70,6 +72,7 @@ class PracticeViewModel(application: Application) : AndroidViewModel(application
     private var allFlatNotes = listOf<MusicalNote>()
     private var noteBeatPositions = listOf<Float>()
     private var lastNoteEvaluatedTimestamp = 0L
+    private var lastEvaluatedMidi = -1
 
     init {
         // Collect live audio pitch stream
@@ -86,9 +89,17 @@ class PracticeViewModel(application: Application) : AndroidViewModel(application
                         return@collect
                     }
 
+                    val now = System.currentTimeMillis()
+
+                    // Suppress lingering acoustic decay resonance from previously evaluated note
+                    if (pitch.midiNote == lastEvaluatedMidi && (now - lastNoteEvaluatedTimestamp < 600L)) {
+                        return@collect
+                    }
+
                     if (NoteUtils.isNoteMatch(pitch.midiNote, expectedNote.midiNote, toleranceSemitones = 0)) {
-                        onRightNotePlayed(activeIdx)
-                    } else {
+                        onRightNotePlayed(activeIdx, pitch.midiNote)
+                    } else if (pitch.midiNote != lastEvaluatedMidi) {
+                        // Only register wrong note if it's a new distinct strike different from last evaluated note
                         onWrongNotePlayed(pitch.midiNote)
                     }
                 }
@@ -106,6 +117,9 @@ class PracticeViewModel(application: Application) : AndroidViewModel(application
             currentBeat += note.duration.beats
             pos
         }
+
+        lastEvaluatedMidi = -1
+        lastNoteEvaluatedTimestamp = 0L
 
         _uiState.value = PracticeUiState(
             currentLesson = lesson,
@@ -164,7 +178,7 @@ class PracticeViewModel(application: Application) : AndroidViewModel(application
                 delay(60_000L / _uiState.value.bpm)
             }
 
-            // Transition to Note-Driven Playback (Sheet music stays on note until right note is played!)
+            // Transition to Note-Driven Playback
             _uiState.update {
                 it.copy(
                     isPlaying = true,
@@ -202,6 +216,9 @@ class PracticeViewModel(application: Application) : AndroidViewModel(application
                 pos
             }
 
+            lastEvaluatedMidi = -1
+            lastNoteEvaluatedTimestamp = 0L
+
             _uiState.value = PracticeUiState(
                 currentLesson = variedLesson,
                 bpm = pieceToPlay.defaultBpm,
@@ -232,17 +249,20 @@ class PracticeViewModel(application: Application) : AndroidViewModel(application
 
             val isRightNote = NoteUtils.isNoteMatch(midiNote, expectedNote.midiNote)
             if (isRightNote) {
-                onRightNotePlayed(activeIdx)
+                onRightNotePlayed(activeIdx, midiNote)
             } else {
                 onWrongNotePlayed(midiNote)
             }
         }
     }
 
-    private fun onRightNotePlayed(noteIdx: Int) {
+    private fun onRightNotePlayed(noteIdx: Int, playedMidi: Int) {
         val now = System.currentTimeMillis()
-        if (now - lastNoteEvaluatedTimestamp < 350L) return // Acoustic resonance lockout window to prevent double hits
+        if (now - lastNoteEvaluatedTimestamp < 400L && playedMidi == lastEvaluatedMidi) return
         lastNoteEvaluatedTimestamp = now
+        lastEvaluatedMidi = playedMidi
+
+        noteAnalyticsRepo.recordNoteHit(playedMidi, isCorrect = true)
 
         _uiState.update { state ->
             val updatedMap = state.noteResultsMap.toMutableMap()
@@ -298,8 +318,10 @@ class PracticeViewModel(application: Application) : AndroidViewModel(application
 
     private fun onWrongNotePlayed(playedMidi: Int) {
         val now = System.currentTimeMillis()
-        if (now - lastNoteEvaluatedTimestamp < 350L) return // Acoustic resonance lockout window
+        if (now - lastNoteEvaluatedTimestamp < 400L) return
         lastNoteEvaluatedTimestamp = now
+
+        noteAnalyticsRepo.recordNoteHit(playedMidi, isCorrect = false)
 
         _uiState.update { state ->
             val newMissed = state.missedNotesCount + 1
